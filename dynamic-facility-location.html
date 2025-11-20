@@ -1,0 +1,691 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dynamic Facility Location - Wesolowsky (1973)</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    
+    <!-- Babel -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- Three.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+    <!-- KaTeX for Math -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/contrib/auto-render.min.js"></script>
+
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Lora:ital,wght@0,400;0,600;1,400&display=swap');
+        
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #FAFAFA;
+            color: #1e293b;
+        }
+        
+        h1, h2, h3, h4 {
+            font-family: 'Lora', serif;
+        }
+
+        .math-block {
+            overflow-x: auto;
+            padding: 1.5rem;
+            background: #ffffff;
+            border-radius: 0.75rem;
+            border: 1px solid #e2e8f0;
+            border-left: 4px solid #3b82f6;
+            margin: 1.5rem 0;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+        }
+
+        .canvas-container {
+            width: 100%;
+            height: 400px;
+            background: #0f172a;
+            border-radius: 1rem;
+            overflow: hidden;
+            position: relative;
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+        }
+
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(226, 232, 240, 0.8);
+        }
+
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #f1f1f1; 
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #cbd5e1; 
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8; 
+        }
+
+        /* Tree Animation */
+        .tree-node {
+            transition: all 0.3s ease;
+        }
+        .tree-node:hover circle {
+            fill: #3b82f6;
+            r: 8;
+        }
+        .tree-path {
+            stroke-dasharray: 1000;
+            stroke-dashoffset: 0;
+            animation: draw 2s ease forwards;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef, useMemo } = React;
+
+        // --- Math Component using KaTeX ---
+        const Latex = ({ children, block = false }) => {
+            const containerRef = useRef(null);
+
+            useEffect(() => {
+                if (containerRef.current) {
+                    let texString = '';
+                    if (typeof children === 'string') {
+                        texString = children;
+                    } else if (typeof children === 'number') {
+                        texString = String(children);
+                    } else if (Array.isArray(children)) {
+                        texString = children.map(c => String(c)).join('');
+                    } else {
+                        texString = String(children || '');
+                    }
+
+                    try {
+                        katex.render(texString, containerRef.current, {
+                            throwOnError: false,
+                            displayMode: block
+                        });
+                    } catch (error) {
+                        console.error("KaTeX Rendering Error:", error);
+                        containerRef.current.innerText = texString;
+                    }
+                }
+            }, [children, block]);
+
+            return <span ref={containerRef} className={block ? "block my-2" : "inline"} />;
+        };
+
+        // --- 3D Visualizer Component (Three.js) ---
+        const CostSurfaceVisualizer = () => {
+            const mountRef = useRef(null);
+            const [period, setPeriod] = useState(1);
+
+            useEffect(() => {
+                // Scene Setup
+                const scene = new THREE.Scene();
+                scene.background = new THREE.Color(0x0f172a);
+                scene.fog = new THREE.FogExp2(0x0f172a, 0.035);
+
+                const camera = new THREE.PerspectiveCamera(50, mountRef.current.clientWidth / mountRef.current.clientHeight, 0.1, 1000);
+                camera.position.set(20, 15, 20);
+                camera.lookAt(0, 0, 0);
+
+                const renderer = new THREE.WebGLRenderer({ antialias: true });
+                renderer.setSize(mountRef.current.clientWidth, mountRef.current.clientHeight);
+                renderer.shadowMap.enabled = true;
+                mountRef.current.appendChild(renderer.domElement);
+
+                // Lighting
+                const ambientLight = new THREE.AmbientLight(0x404040, 2);
+                scene.add(ambientLight);
+                const dirLight = new THREE.DirectionalLight(0xffffff, 1);
+                dirLight.position.set(10, 20, 10);
+                dirLight.castShadow = true;
+                scene.add(dirLight);
+
+                // Ground Grid
+                const gridHelper = new THREE.GridHelper(40, 40, 0x334155, 0x1e293b);
+                scene.add(gridHelper);
+
+                // Demand Points (Spheres)
+                const demands = [
+                    { x: -5, z: -5, w_base: 2 },
+                    { x: 8, z: 2, w_base: 1.5 },
+                    { x: -2, z: 8, w_base: 3 },
+                    { x: 5, z: -7, w_base: 1 }
+                ];
+
+                const spheres = demands.map(d => {
+                    const geo = new THREE.SphereGeometry(0.5, 16, 16);
+                    const mat = new THREE.MeshStandardMaterial({ color: 0x3b82f6, emissive: 0x1d4ed8 });
+                    const mesh = new THREE.Mesh(geo, mat);
+                    mesh.position.set(d.x, 0, d.z);
+                    scene.add(mesh);
+                    return mesh;
+                });
+
+                // Optimal Location Marker (The Gold Cube)
+                const optGeo = new THREE.BoxGeometry(1, 1, 1);
+                const optMat = new THREE.MeshStandardMaterial({ color: 0xf59e0b, emissive: 0xb45309 });
+                const optimalMarker = new THREE.Mesh(optGeo, optMat);
+                scene.add(optimalMarker);
+
+                // Surface Mesh (The Cost Function)
+                const geometry = new THREE.PlaneGeometry(30, 30, 60, 60);
+                const material = new THREE.MeshPhongMaterial({ 
+                    color: 0x64748b, 
+                    side: THREE.DoubleSide, 
+                    wireframe: true,
+                    transparent: true,
+                    opacity: 0.3
+                });
+                const plane = new THREE.Mesh(geometry, material);
+                plane.rotation.x = -Math.PI / 2;
+                scene.add(plane);
+
+                // Animation Loop
+                let frameId;
+                
+                const animate = () => {
+                    const timeFactor = period * 0.5;
+                    
+                    const currentWeights = demands.map((d, i) => {
+                        return d.w_base + Math.sin(timeFactor + i) * 1.5; 
+                    });
+
+                    spheres.forEach((mesh, i) => {
+                        const s = Math.max(0.2, currentWeights[i] * 0.4);
+                        mesh.scale.set(s, s, s);
+                    });
+
+                    const positions = plane.geometry.attributes.position;
+                    let minCost = Infinity;
+                    let optX = 0, optZ = 0;
+
+                    for (let i = 0; i < positions.count; i++) {
+                        const x = positions.getX(i);
+                        const z = positions.getY(i); 
+                        
+                        let totalCost = 0;
+                        demands.forEach((d, idx) => {
+                            const dist = Math.abs(x - d.x) + Math.abs(z - d.z);
+                            totalCost += dist * currentWeights[idx];
+                        });
+
+                        const height = totalCost * 0.15; 
+                        positions.setZ(i, height);
+
+                        if (totalCost < minCost) {
+                            minCost = totalCost;
+                            optX = x;
+                            optZ = z;
+                        }
+                    }
+                    positions.needsUpdate = true;
+
+                    optimalMarker.position.x += (optX - optimalMarker.position.x) * 0.1;
+                    optimalMarker.position.z += (optZ - optimalMarker.position.z) * 0.1;
+                    optimalMarker.position.y = (minCost * 0.15) + 0.5;
+                    optimalMarker.rotation.y += 0.01;
+
+                    renderer.render(scene, camera);
+                    frameId = requestAnimationFrame(animate);
+                };
+
+                animate();
+
+                const handleResize = () => {
+                    if(mountRef.current) {
+                        const w = mountRef.current.clientWidth;
+                        const h = mountRef.current.clientHeight;
+                        renderer.setSize(w, h);
+                        camera.aspect = w / h;
+                        camera.updateProjectionMatrix();
+                    }
+                };
+                window.addEventListener('resize', handleResize);
+
+                return () => {
+                    cancelAnimationFrame(frameId);
+                    window.removeEventListener('resize', handleResize);
+                    if(mountRef.current && renderer.domElement) {
+                        mountRef.current.removeChild(renderer.domElement);
+                    }
+                    geometry.dispose();
+                    material.dispose();
+                };
+            }, [period]);
+
+            return (
+                <div className="relative mb-8">
+                    <div ref={mountRef} className="canvas-container" />
+                    <div className="absolute bottom-4 left-4 right-4 glass-panel p-4 rounded-lg flex flex-col gap-2">
+                        <div className="flex justify-between items-center text-sm font-semibold text-slate-700">
+                            <span>Timeline: <span className="text-blue-600">Period {period}</span></span>
+                            <span className="flex items-center gap-1"><i data-lucide="activity" className="w-4 h-4"></i> Cost Surface</span>
+                        </div>
+                        <input 
+                            type="range" 
+                            min="1" 
+                            max="10" 
+                            step="0.1" 
+                            value={period} 
+                            onChange={(e) => setPeriod(parseFloat(e.target.value))}
+                            className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
+                        />
+                        <p className="text-xs text-slate-500">
+                            As demand weights change over time (simulated by slider), the cost landscape shifts. The <b>Orange Cube</b> tracks the minimum cost location.
+                        </p>
+                    </div>
+                </div>
+            );
+        };
+
+        // --- Dynamic Programming Tree Visualizer ---
+        const DynamicProgrammingTree = () => {
+            const [hoveredNode, setHoveredNode] = useState(null);
+
+            // Tree Data: Backward induction from Period r=3
+            // Structure: Levels represent time steps going backwards.
+            // 0 = No Move (Stay), 1 = Move
+            const levels = [
+                { period: 3, nodes: [{ id: 'root', val: 'End', x: 50, y: 10 }] },
+                { period: 2, nodes: [
+                    { id: '0', val: '0', parent: 'root', x: 30, y: 40, desc: "Stay at Period 3 location. Solve static problem for period 2 & 3 combined." }, 
+                    { id: '1', val: '1', parent: 'root', x: 70, y: 40, desc: "Move at Period 3. Pay cost c3. Solve static problem for period 3." }
+                ]},
+                { period: 1, nodes: [
+                    { id: '00', val: '0', parent: '0', x: 20, y: 80, desc: "Stay at Period 2. Solve static problem for 1, 2 & 3 combined." },
+                    { id: '01', val: '1', parent: '0', x: 40, y: 80, desc: "Move at Period 2. Pay cost c2. Solve static problem for 2 & 3." },
+                    { id: '10', val: '0', parent: '1', x: 60, y: 80, desc: "Stay at Period 2. Solve static problem for 1 & 2." },
+                    { id: '11', val: '1', parent: '1', x: 80, y: 80, desc: "Move at Period 2. Pay cost c2. Solve static problem for period 2." }
+                ]}
+            ];
+
+            return (
+                <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
+                    <div className="flex justify-between items-end mb-4">
+                        <div>
+                            <h3 className="text-lg font-bold text-slate-900">Incomplete Dynamic Programming Tree</h3>
+                            <p className="text-sm text-slate-500">Visualizing the backward decision process (Fig 1 in paper)</p>
+                        </div>
+                        <div className="text-xs text-right text-slate-400">
+                            Hover nodes for logic<br/>
+                            <span className="font-mono font-bold text-slate-600">0 = Stay</span>, <span className="font-mono font-bold text-blue-600">1 = Move</span>
+                        </div>
+                    </div>
+                    
+                    <div className="relative w-full h-[300px] bg-slate-50 rounded-lg overflow-hidden border border-slate-100">
+                        <svg width="100%" height="100%" viewBox="0 0 100 100" preserveAspectRatio="none">
+                            {/* Connections */}
+                            {levels.map((level, i) => (
+                                level.nodes.map(node => {
+                                    if (!node.parent) return null;
+                                    const parentNode = levels[i-1].nodes.find(n => n.id === node.parent);
+                                    if (!parentNode) return null;
+                                    
+                                    const isMove = node.val === '1';
+                                    return (
+                                        <line 
+                                            key={`line-${node.id}`}
+                                            x1={parentNode.x} y1={parentNode.y} 
+                                            x2={node.x} y2={node.y} 
+                                            stroke={isMove ? "#3b82f6" : "#94a3b8"} 
+                                            strokeWidth="0.5"
+                                            strokeDasharray={isMove ? "0" : "2,1"}
+                                        />
+                                    );
+                                })
+                            ))}
+
+                            {/* Nodes */}
+                            {levels.map((level) => (
+                                level.nodes.map(node => (
+                                    <g 
+                                        key={node.id} 
+                                        className="tree-node cursor-pointer"
+                                        onMouseEnter={() => setHoveredNode(node)}
+                                        onMouseLeave={() => setHoveredNode(null)}
+                                    >
+                                        <circle 
+                                            cx={node.x} cy={node.y} 
+                                            r={hoveredNode?.id === node.id ? 3 : 2} 
+                                            fill={node.val === '1' ? "#3b82f6" : (node.val === 'End' ? "#0f172a" : "#64748b")}
+                                        />
+                                        <text 
+                                            x={node.x} y={node.y - 4} 
+                                            textAnchor="middle" 
+                                            fontSize="3" 
+                                            fill="#475569" 
+                                            fontWeight="bold"
+                                        >
+                                            {node.val === 'End' ? 'Start (r)' : node.val}
+                                        </text>
+                                    </g>
+                                ))
+                            ))}
+                        </svg>
+
+                        {/* Tooltip overlay */}
+                        {hoveredNode && (
+                            <div className="absolute bottom-0 left-0 right-0 bg-white/90 backdrop-blur p-3 border-t border-blue-100 text-sm shadow-sm transition-all">
+                                <span className="font-bold text-blue-900">Decision Node {hoveredNode.id}:</span> {hoveredNode.desc}
+                            </div>
+                        )}
+
+                        {/* Labels */}
+                        <div className="absolute top-2 left-2 text-xs font-bold text-slate-400">Period r</div>
+                        <div className="absolute top-[35%] left-2 text-xs font-bold text-slate-400">Period r-1</div>
+                        <div className="absolute top-[75%] left-2 text-xs font-bold text-slate-400">Period r-2</div>
+                    </div>
+                    
+                    <div className="mt-4 text-sm text-slate-600 bg-blue-50 p-3 rounded border border-blue-100">
+                        <strong>Pruning Logic:</strong> At each stage, if the cumulative cost of a branch exceeds the minimum cost found so far for that stage, the branch is "pruned" (discarded), saving computation.
+                    </div>
+                </div>
+            );
+        };
+
+        // --- Main App Component ---
+        const App = () => {
+            useEffect(() => {
+                lucide.createIcons();
+            }, []);
+
+            return (
+                <div className="max-w-4xl mx-auto px-4 py-12">
+                    
+                    {/* Header Section */}
+                    <header className="mb-12 border-b border-slate-200 pb-8">
+                        <div className="flex items-center gap-2 text-blue-600 font-bold tracking-wider text-xs uppercase mb-3">
+                            <i data-lucide="file-text" className="w-4 h-4"></i>
+                            <span>Paper Deep Dive</span>
+                        </div>
+                        <h1 className="text-4xl md:text-5xl font-bold text-slate-900 mb-4 leading-tight">
+                            Dynamic Facility Location
+                        </h1>
+                        <div className="flex flex-wrap gap-6 text-slate-500 text-sm font-medium">
+                            <div className="flex items-center gap-2">
+                                <i data-lucide="user" className="w-4 h-4"></i>
+                                <span>George O. Wesolowsky</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <i data-lucide="book-open" className="w-4 h-4"></i>
+                                <span>Management Science, Vol. 19, No. 11 (1973)</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <i data-lucide="tag" className="w-4 h-4"></i>
+                                <span>Dynamic Programming, Weber Problem</span>
+                            </div>
+                        </div>
+                    </header>
+
+                     {/* Quick Summary Card (Added back) */}
+                    <section className="mb-12">
+                        <div className="bg-blue-50 border border-blue-100 rounded-xl p-6 md:p-8 flex gap-4">
+                            <div className="shrink-0 bg-blue-600 text-white rounded-full w-10 h-10 flex items-center justify-center mt-1 shadow-lg shadow-blue-600/20">
+                                <i data-lucide="lightbulb" className="w-5 h-5"></i>
+                            </div>
+                            <div>
+                                <h3 className="text-blue-900 font-bold text-lg mb-2">One-Sentence Summary</h3>
+                                <p className="text-blue-800/80 leading-relaxed">
+                                    This paper extends the static single-facility location model to a multi-period planning horizon, introducing an efficient algorithm to determine the optimal sequence of locations by balancing transportation costs against relocation costs.
+                                </p>
+                            </div>
+                        </div>
+                    </section>
+
+                    {/* Background & Core Idea */}
+                    <section className="mb-16">
+                        <h2 className="text-3xl font-bold text-slate-900 mb-6 flex items-center gap-2">
+                            <i data-lucide="compass" className="w-6 h-6 text-blue-600"></i>
+                            Background & Core Idea
+                        </h2>
+                        <div className="prose prose-lg text-slate-600 max-w-none">
+                            <p>
+                                Traditional facility location models are <strong>static</strong>: they assume demand, costs, and geography remain constant forever. However, real-world facilities operate over years where these parameters fluctuate. 
+                            </p>
+                            <p>
+                                <strong>The Core Idea:</strong> Wesolowsky proposes that we shouldn't just find one "perfect" location. Instead, we should find an <strong>optimal sequence of locations</strong> over a planning horizon. The key trade-off is:
+                            </p>
+                            <div className="grid md:grid-cols-2 gap-6 my-8">
+                                <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+                                    <div className="font-bold text-slate-900 mb-2">Benefits of Relocation</div>
+                                    <p className="text-sm">Moving the facility closer to the shifting center of demand reduces transportation costs (<Latex>f_k</Latex>).</p>
+                                </div>
+                                <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+                                    <div className="font-bold text-slate-900 mb-2">Costs of Relocation</div>
+                                    <p className="text-sm">Moving the facility incurs a fixed penalty (<Latex>c_k</Latex>) representing closing/opening costs, equipment transfer, or lost time.</p>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+
+                    {/* 3D Visualization */}
+                    <CostSurfaceVisualizer />
+
+                    {/* Detailed Content Grid */}
+                    <div className="grid md:grid-cols-[1fr_320px] gap-12 mt-12">
+                        
+                        {/* Left Column: Detailed Analysis */}
+                        <main>
+                            
+                            {/* The Problem Setup */}
+                            <section className="mb-16">
+                                <h2 className="text-2xl font-bold text-slate-900 mb-6 flex items-center gap-2">
+                                    <i data-lucide="target" className="w-5 h-5 text-blue-600"></i>
+                                    The Problem Setup
+                                </h2>
+                                <p className="text-slate-600 mb-4">
+                                    The goal is to minimize the total discounted cost over a horizon of <Latex>r</Latex> periods. The model extends the generalized Weber problem into the time dimension.
+                                </p>
+                                
+                                <div className="math-block">
+                                    <h4 className="text-xs font-bold text-blue-600 uppercase mb-4">Mathematical Formulation (Eq. 8)</h4>
+                                    <Latex block={true}>
+                                        {`\\text{Minimize } Z = \\sum_{k=1}^{r} \\sum_{i=1}^{m_k} f_{ki}(x_k, y_k) + \\sum_{k=2}^{r} c_k z_k`}
+                                    </Latex>
+                                    
+                                    <div className="mt-6 space-y-3 text-sm text-slate-700">
+                                        <div className="flex gap-3">
+                                            <span className="font-mono text-blue-600 shrink-0 w-24 text-right"><Latex>{`f_{ki}(x_k, y_k)`}</Latex></span>
+                                            <span>
+                                                The <strong>Present Value</strong> of the transportation cost in period <Latex>k</Latex> to destination <Latex>i</Latex>. 
+                                                This accounts for the time value of money and forecast confidence.
+                                            </span>
+                                        </div>
+                                        <div className="flex gap-3">
+                                            <span className="font-mono text-blue-600 shrink-0 w-24 text-right"><Latex>{`c_k`}</Latex></span>
+                                            <span>
+                                                The cost of moving the facility at the beginning of period <Latex>k</Latex>.
+                                                Assumption: This cost is independent of the distance moved.
+                                            </span>
+                                        </div>
+                                        <div className="flex gap-3">
+                                            <span className="font-mono text-blue-600 shrink-0 w-24 text-right"><Latex>{`z_k`}</Latex></span>
+                                            <span>
+                                                Binary decision variable. <Latex>z_k = 1</Latex> if the location changes at period <Latex>k</Latex>, <Latex>0</Latex> if it stays.
+                                                Constraint: <Latex>z_k = 0</Latex> if distance moved is 0.
+                                            </span>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <p className="text-slate-600 text-sm italic border-l-2 border-slate-300 pl-4">
+                                    Note: The term <Latex>{`f_{ki}`}</Latex> usually takes the form <Latex>{`w_{ki} d_k(X, P_i)`}</Latex>, where <Latex>w</Latex> is weight/volume and <Latex>d</Latex> is distance (Rectangular/Manhattan distance is used for efficiency).
+                                </p>
+                            </section>
+
+                            {/* Solution Algorithm */}
+                            <section className="mb-16">
+                                <h2 className="text-2xl font-bold text-slate-900 mb-6 flex items-center gap-2">
+                                    <i data-lucide="cpu" className="w-5 h-5 text-blue-600"></i>
+                                    Solution Algorithm
+                                </h2>
+
+                                <div className="space-y-8">
+                                    {/* Decomposition Strategy */}
+                                    <div>
+                                        <h3 className="text-lg font-bold text-slate-800 mb-2">1. Decomposition Strategy</h3>
+                                        <p className="text-slate-600 mb-4 leading-relaxed">
+                                            Wesolowsky observes that for any fixed sequence of moves (a fixed vector <Latex>Z</Latex>), the problem decomposes into independent <strong>static</strong> location problems.
+                                        </p>
+                                        <p className="text-slate-600 mb-4">
+                                            If the facility moves at period <Latex>p</Latex> and moves again at period <Latex>l+1</Latex> (staying put from <Latex>p</Latex> to <Latex>l</Latex>), the optimal location for that duration is found by minimizing:
+                                        </p>
+                                        <div className="bg-slate-50 p-4 rounded border border-slate-200 text-center">
+                                            <Latex>{`\\text{Min } \\sum_{k=p}^{l} \\sum_{i=1}^{m_k} w_{ki} (|x - a_{ki}| + |y - b_{ki}|)`}</Latex>
+                                        </div>
+                                        <p className="text-slate-600 mt-2 text-sm">
+                                            This is just a large static Weber problem aggregating all demands from periods <Latex>p</Latex> to <Latex>l</Latex>.
+                                        </p>
+                                    </div>
+
+                                    {/* Dynamic Programming */}
+                                    <div>
+                                        <h3 className="text-lg font-bold text-slate-800 mb-2">2. Incomplete Dynamic Programming</h3>
+                                        <p className="text-slate-600 mb-4">
+                                            Total enumeration of all move combinations (<Latex>2^{`r-1`}</Latex>) is inefficient. The paper proposes a tree-based method that avoids re-calculating static problems.
+                                        </p>
+                                        
+                                        <DynamicProgrammingTree />
+
+                                        <div className="mt-6 grid grid-cols-2 gap-4">
+                                            <div className="p-4 border border-green-200 bg-green-50 rounded-lg">
+                                                <h4 className="font-bold text-green-800 text-sm mb-1">Efficiency Gain</h4>
+                                                <p className="text-xs text-green-700">
+                                                    For 20 periods, enumeration requires solving ~2.8 million static problems. This algorithm reduces it to just <strong>210</strong> problems (assuming ties are pruned).
+                                                </p>
+                                            </div>
+                                            <div className="p-4 border border-blue-200 bg-blue-50 rounded-lg">
+                                                <h4 className="font-bold text-blue-800 text-sm mb-1">Why "Incomplete"?</h4>
+                                                <p className="text-xs text-blue-700">
+                                                    Branches labeled "0" (Stay) cannot be fully evaluated immediately because their total cost depends on how long the facility <em>continues</em> to stay in future steps.
+                                                </p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </section>
+
+                            {/* Project Implications */}
+                            <section>
+                                <h2 className="text-2xl font-bold text-slate-900 mb-6 flex items-center gap-2">
+                                    <i data-lucide="zap" className="w-5 h-5 text-amber-500"></i>
+                                    Implications for Shenzhen 120
+                                </h2>
+                                <div className="space-y-4">
+                                    <div className="flex gap-4 p-4 bg-white rounded-xl border border-slate-100 shadow-sm">
+                                        <div className="shrink-0 w-10 h-10 rounded-full bg-amber-100 text-amber-600 flex items-center justify-center font-bold">1</div>
+                                        <div>
+                                            <h4 className="font-bold text-slate-900">Dynamic Standby Points</h4>
+                                            <p className="text-slate-600 text-sm mt-1">
+                                                Your 25-month dataset allows you to predict demand shifts (e.g., 9 AM vs 9 PM, or rainy season). This model proves that <strong>shifting standby locations</strong> is mathematically superior to static stations if the relocation cost is managed.
+                                            </p>
+                                        </div>
+                                    </div>
+                                    <div className="flex gap-4 p-4 bg-white rounded-xl border border-slate-100 shadow-sm">
+                                        <div className="shrink-0 w-10 h-10 rounded-full bg-amber-100 text-amber-600 flex items-center justify-center font-bold">2</div>
+                                        <div>
+                                            <h4 className="font-bold text-slate-900">Quantifying Relocation <Latex>c_k</Latex></h4>
+                                            <p className="text-slate-600 text-sm mt-1">
+                                                Define <Latex>c_k</Latex> not just as money, but as <strong>risk</strong> (coverage gap during transit) or <strong>fatigue</strong>. You can solve for the optimal frequency of redeployment—perhaps shifting only every 4 hours instead of every hour.
+                                            </p>
+                                        </div>
+                                    </div>
+                                    <div className="flex gap-4 p-4 bg-white rounded-xl border border-slate-100 shadow-sm">
+                                        <div className="shrink-0 w-10 h-10 rounded-full bg-amber-100 text-amber-600 flex items-center justify-center font-bold">3</div>
+                                        <div>
+                                            <h4 className="font-bold text-slate-900">Efficient Computation</h4>
+                                            <p className="text-slate-600 text-sm mt-1">
+                                                Since Shenzhen uses a grid system (Manhattan distance is often a good approximation for urban grids), the <strong>weighted median</strong> solution approach in this paper allows for extremely fast recalculation of optimal points, enabling real-time decision support.
+                                            </p>
+                                        </div>
+                                    </div>
+                                </div>
+                            </section>
+
+                        </main>
+
+                        {/* Right Column: Sidebar Info */}
+                        <aside className="space-y-8 h-fit sticky top-8">
+                            
+                            {/* Metadata Card */}
+                            <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+                                <h3 className="font-bold text-xs uppercase text-slate-400 mb-4 tracking-wider">Paper Metadata</h3>
+                                <ul className="space-y-4 text-sm">
+                                    <li className="flex flex-col">
+                                        <span className="text-slate-500 text-xs">Title</span>
+                                        <span className="font-medium text-slate-800">Dynamic Facility Location</span>
+                                    </li>
+                                    <li className="flex flex-col">
+                                        <span className="text-slate-500 text-xs">Authors</span>
+                                        <span className="font-medium text-slate-800">George O. Wesolowsky</span>
+                                    </li>
+                                    <li className="flex flex-col">
+                                        <span className="text-slate-500 text-xs">Journal</span>
+                                        <span className="font-medium text-slate-800">Management Science (1973)</span>
+                                    </li>
+                                    <li className="flex flex-col">
+                                        <span className="text-slate-500 text-xs">DOI</span>
+                                        <a href="https://doi.org/10.1287/mnsc.19.11.1241" className="font-medium text-blue-600 hover:underline">10.1287/mnsc.19.11.1241</a>
+                                    </li>
+                                </ul>
+                            </div>
+
+                            {/* Key Takeaways */}
+                            <div className="bg-slate-900 text-white p-6 rounded-xl shadow-lg">
+                                <h3 className="font-bold text-lg mb-4 border-b border-slate-700 pb-2">Core Discoveries</h3>
+                                <ul className="space-y-4 text-sm text-slate-300">
+                                    <li className="flex gap-3">
+                                        <i data-lucide="check-circle" className="w-4 h-4 shrink-0 text-green-400 mt-0.5"></i>
+                                        <span>Static solutions are suboptimal when demand curves shift significantly over time.</span>
+                                    </li>
+                                    <li className="flex gap-3">
+                                        <i data-lucide="check-circle" className="w-4 h-4 shrink-0 text-green-400 mt-0.5"></i>
+                                        <span>With Manhattan distances (grid cities), the dynamic problem decomposes into simple linear search problems.</span>
+                                    </li>
+                                    <li className="flex gap-3">
+                                        <i data-lucide="check-circle" className="w-4 h-4 shrink-0 text-green-400 mt-0.5"></i>
+                                        <span>Pruning the decision tree allows finding the optimal sequence without checking every possibility.</span>
+                                    </li>
+                                </ul>
+                            </div>
+
+                        </aside>
+                    </div>
+
+                    {/* Footer */}
+                    <footer className="mt-20 border-t border-slate-200 pt-8 text-center text-slate-400 text-sm">
+                        <p>Generated for the Shenzhen Ambulance Optimization Project</p>
+                        <p className="mt-2">Based on Wesolowsky, G. O. (1973)</p>
+                    </footer>
+
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
