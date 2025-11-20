@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Shenzhen 120 Ambulance Optimization - Research Hub</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    
+    <!-- Babel -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+
+    <!-- Google Fonts -->
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Playfair+Display:ital,wght@0,600;0,700;1,600&display=swap');
+        
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #F8FAFC;
+            color: #334155;
+            background-image: radial-gradient(#cbd5e1 1px, transparent 1px);
+            background-size: 40px 40px;
+        }
+        
+        h1, h2, h3, .serif {
+            font-family: 'Playfair Display', serif;
+        }
+
+        /* Smooth fade in */
+        .fade-enter {
+            opacity: 0;
+            transform: translateY(10px);
+        }
+        .fade-enter-active {
+            opacity: 1;
+            transform: translateY(0);
+            transition: opacity 300ms, transform 300ms;
+        }
+
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent; 
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #cbd5e1; 
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8; 
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+
+        // --- Data: Papers & References ---
+        const papersData = [
+            {
+                id: "review",
+                category: "Literature Review & Taxonomy",
+                title: "Facility Location Under Uncertainty: A Review",
+                filename: "Facility-Location-Under-Uncertainty-A-Review.html", // Link to your file
+                authors: "Lawrence V. Snyder",
+                journal: "IIE Transactions (2006)",
+                keywords: ["Stochastic", "Robust", "Minimax Regret", "p-Robustness"],
+                summary: "A comprehensive survey categorizing location models into 'Stochastic' (risk/known probs) and 'Robust' (uncertainty/unknown probs). It introduces key concepts like p-robustness.",
+                conclusion: "For the Shenzhen project, this paper provides the framework to choose between optimizing for average efficiency (Stochastic) or worst-case safety (Robust).",
+                citationsLeft: [
+                    "Rosenhead et al. (1972): Robustness def.",
+                    "Owen & Daskin (1998): Strategic Location"
+                ],
+                citationsRight: [
+                    "Kouvelis et al. (1992): p-Robustness",
+                    "Sheppard (1974): Scenario approach"
+                ]
+            },
+            {
+                id: "dynamic",
+                category: "Foundational Dynamic Models",
+                title: "Dynamic Facility Location",
+                filename: "dynamic-facility-location.html", // Link to your file
+                authors: "George O. Wesolowsky",
+                journal: "Management Science (1973)",
+                keywords: ["Dynamic Programming", "Multi-period", "Relocation Cost"],
+                summary: "The seminal paper introducing time as a dimension in facility location. It proposes an incomplete dynamic programming algorithm to find optimal location sequences.",
+                conclusion: "Essential for the Shenzhen project to justify 'dynamic standby points'—moving ambulances based on time-of-day demand shifts versus the cost of relocation.",
+                citationsLeft: [
+                    "Ballou (1968): Dynamic Warehouse",
+                    "Weber (1909): Static Problem"
+                ],
+                citationsRight: [
+                    "Sweeney & Tatham (1976): Dynamic",
+                    "Erlenkotter (1981): Pre-project planning"
+                ]
+            },
+            {
+                id: "robust",
+                category: "Robust Optimization Techniques",
+                title: "Facility Location: A Robust Optimization Approach",
+                filename: "robust-optimization.html", // Link to your file
+                authors: "Baron, O., Milner, J., & Naseraldin, H.",
+                journal: "Production and Operations Management (2011)",
+                keywords: ["Box Uncertainty", "Ellipsoidal Uncertainty", "Conic Programming"],
+                summary: "Applies modern robust optimization (RO) to location problems. It mathematically proves that modeling uncertainty as an 'Ellipsoid' (Risk Pooling) is superior to a 'Box'.",
+                conclusion: "Directly guides the capacity planning for Shenzhen stations. Using Box models for extreme disasters (Typhoons) and Ellipsoidal models for daily demand fluctuations.",
+                citationsLeft: [
+                    "Ben-Tal & Nemirovski (1998): RO Theory",
+                    "Bertsimas & Sim (2004): Price of Robustness"
+                ],
+                citationsRight: [
+                    "Daskin (1995): Network Location",
+                    "Soyster (1973): Convex Programming"
+                ]
+            }
+        ];
+
+        // --- Components ---
+
+        const ReferenceChip = ({ text, align }) => (
+            <div className={`hidden lg:flex items-center gap-2 text-xs text-slate-400 transition-all hover:text-slate-600 hover:scale-105 cursor-default ${align === 'right' ? 'flex-row' : 'flex-row-reverse'}`}>
+                <span className="bg-white border border-slate-200 px-3 py-1.5 rounded-full shadow-sm whitespace-nowrap">
+                    {text}
+                </span>
+                <div className="w-8 h-px bg-slate-300"></div>
+            </div>
+        );
+
+        const PaperCard = ({ paper }) => {
+            const [isOpen, setIsOpen] = useState(false);
+
+            return (
+                <div className="relative group">
+                    
+                    {/* Layout Container for Branching */}
+                    <div className="flex items-center justify-center gap-4">
+                        
+                        {/* Left Branches (Citations) */}
+                        <div className="hidden lg:flex flex-col gap-3 items-end w-64 opacity-0 group-hover:opacity-100 transition-opacity duration-500 transform -translate-x-4 group-hover:translate-x-0">
+                            {paper.citationsLeft.map((cit, i) => (
+                                <ReferenceChip key={i} text={cit} align="left" />
+                            ))}
+                        </div>
+
+                        {/* Main Card */}
+                        <div className="relative z-10 w-full max-w-2xl bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden transition-all duration-300 hover:shadow-xl hover:border-blue-200">
+                            
+                            {/* Card Header */}
+                            <div className="p-8">
+                                <div className="flex justify-between items-start mb-4">
+                                    <span className="text-xs font-bold tracking-widest text-blue-600 uppercase bg-blue-50 px-3 py-1 rounded-full">
+                                        {paper.category}
+                                    </span>
+                                    <a 
+                                        href={paper.filename}
+                                        className="flex items-center gap-2 text-sm font-semibold text-slate-400 hover:text-blue-600 transition-colors"
+                                    >
+                                        Read Paper <i data-lucide="arrow-right" className="w-4 h-4"></i>
+                                    </a>
+                                </div>
+
+                                <h2 className="text-2xl md:text-3xl font-bold text-slate-800 mb-2 serif leading-tight group-hover:text-blue-900 transition-colors">
+                                    {paper.title}
+                                </h2>
+                                <p className="text-slate-500 text-sm font-medium mb-6">
+                                    {paper.authors} • <span className="italic text-slate-400">{paper.journal}</span>
+                                </p>
+
+                                {/* Toggle Button */}
+                                <button 
+                                    onClick={() => setIsOpen(!isOpen)}
+                                    className="flex items-center gap-2 text-sm font-medium text-slate-600 bg-slate-50 hover:bg-slate-100 px-4 py-2 rounded-lg transition-all w-full justify-center md:w-auto"
+                                >
+                                    {isOpen ? (
+                                        <><i data-lucide="chevron-up" className="w-4 h-4"></i> Hide Overview</>
+                                    ) : (
+                                        <><i data-lucide="book-open" className="w-4 h-4"></i> Quick Overview</>
+                                    )}
+                                </button>
+                            </div>
+
+                            {/* Expandable Content */}
+                            {isOpen && (
+                                <div className="bg-slate-50/50 border-t border-slate-100 p-8 animate-in slide-in-from-top-2 duration-300">
+                                    <div className="grid md:grid-cols-[1fr_1.5fr] gap-8">
+                                        <div className="space-y-4">
+                                            <div>
+                                                <h4 className="text-xs font-bold text-slate-400 uppercase mb-1">Keywords</h4>
+                                                <div className="flex flex-wrap gap-2">
+                                                    {paper.keywords.map(k => (
+                                                        <span key={k} className="text-xs bg-white border border-slate-200 text-slate-600 px-2 py-1 rounded">
+                                                            {k}
+                                                        </span>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                            <div>
+                                                <h4 className="text-xs font-bold text-slate-400 uppercase mb-1">Relevance</h4>
+                                                <p className="text-xs text-blue-600 bg-blue-50/50 p-2 rounded border border-blue-100">
+                                                    Project: Shenzhen 120
+                                                </p>
+                                            </div>
+                                        </div>
+
+                                        <div className="space-y-4 border-l border-slate-200 pl-0 md:pl-8 md:border-l">
+                                            <div>
+                                                <h4 className="text-xs font-bold text-slate-400 uppercase mb-1">Summary</h4>
+                                                <p className="text-sm text-slate-600 leading-relaxed">
+                                                    {paper.summary}
+                                                </p>
+                                            </div>
+                                            <div>
+                                                <h4 className="text-xs font-bold text-slate-400 uppercase mb-1 text-emerald-600">Key Conclusion</h4>
+                                                <p className="text-sm text-slate-800 font-medium leading-relaxed">
+                                                    {paper.conclusion}
+                                                </p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    
+                                    <div className="mt-6 pt-4 border-t border-slate-200 flex justify-end">
+                                        <a 
+                                            href={paper.filename}
+                                            className="bg-slate-900 hover:bg-blue-600 text-white px-6 py-2 rounded-lg text-sm font-medium transition-all flex items-center gap-2 shadow-lg shadow-slate-200"
+                                        >
+                                            Open Full Visualization <i data-lucide="external-link" className="w-4 h-4"></i>
+                                        </a>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Right Branches (Related Works) */}
+                        <div className="hidden lg:flex flex-col gap-3 items-start w-64 opacity-0 group-hover:opacity-100 transition-opacity duration-500 transform translate-x-4 group-hover:translate-x-0">
+                            {paper.citationsRight.map((cit, i) => (
+                                <ReferenceChip key={i} text={cit} align="right" />
+                            ))}
+                        </div>
+                    </div>
+                    
+                    {/* Vertical Connector Line (Visual only) */}
+                    <div className="absolute left-1/2 top-full h-12 w-px bg-slate-200 -translate-x-1/2 hidden last:hidden lg:block"></div>
+                </div>
+            );
+        };
+
+        const App = () => {
+            useEffect(() => {
+                lucide.createIcons();
+            }, []);
+
+            return (
+                <div className="min-h-screen pb-20">
+                    
+                    {/* Hero Section */}
+                    <header className="relative bg-white border-b border-slate-200 pt-20 pb-16 overflow-hidden">
+                        <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-blue-500 via-purple-500 to-emerald-500"></div>
+                        <div className="max-w-5xl mx-auto px-6 text-center relative z-10">
+                            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-slate-100 text-slate-500 text-xs font-bold uppercase tracking-wider mb-6">
+                                <i data-lucide="database" className="w-3 h-3"></i> Research Knowledge Base
+                            </div>
+                            <h1 className="text-5xl md:text-6xl font-bold text-slate-900 mb-6 leading-tight serif">
+                                Shenzhen 120 Ambulance<br />
+                                <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-emerald-600">
+                                    Location Optimization
+                                </span>
+                            </h1>
+                            <p className="text-xl text-slate-500 max-w-2xl mx-auto font-light leading-relaxed">
+                                A curated collection of foundational papers, robust optimization models, and dynamic programming strategies guiding the next generation of emergency response systems.
+                            </p>
+                            
+                            <div className="flex justify-center gap-8 mt-12 text-sm font-medium text-slate-400">
+                                <div className="flex flex-col items-center gap-2">
+                                    <div className="w-12 h-12 rounded-2xl bg-blue-50 flex items-center justify-center text-blue-600 mb-1">
+                                        <i data-lucide="layers" className="w-6 h-6"></i>
+                                    </div>
+                                    <span>3 Core Papers</span>
+                                </div>
+                                <div className="flex flex-col items-center gap-2">
+                                    <div className="w-12 h-12 rounded-2xl bg-purple-50 flex items-center justify-center text-purple-600 mb-1">
+                                        <i data-lucide="network" className="w-6 h-6"></i>
+                                    </div>
+                                    <span>12 Citations</span>
+                                </div>
+                                <div className="flex flex-col items-center gap-2">
+                                    <div className="w-12 h-12 rounded-2xl bg-emerald-50 flex items-center justify-center text-emerald-600 mb-1">
+                                        <i data-lucide="zap" className="w-6 h-6"></i>
+                                    </div>
+                                    <span>Interactive Models</span>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        {/* Decorative Elements */}
+                        <div className="absolute top-1/2 left-10 w-64 h-64 bg-blue-100 rounded-full mix-blend-multiply filter blur-3xl opacity-30 animate-blob"></div>
+                        <div className="absolute top-1/2 right-10 w-64 h-64 bg-purple-100 rounded-full mix-blend-multiply filter blur-3xl opacity-30 animate-blob animation-delay-2000"></div>
+                    </header>
+
+                    {/* Main Content */}
+                    <main className="max-w-7xl mx-auto px-6 pt-16">
+                        <div className="space-y-16">
+                            {papersData.map((paper, index) => (
+                                <PaperCard key={paper.id} paper={paper} />
+                            ))}
+                        </div>
+                    </main>
+
+                    {/* Footer */}
+                    <footer className="max-w-5xl mx-auto px-6 mt-32 mb-12 pt-8 border-t border-slate-200 text-center">
+                        <p className="text-slate-400 text-sm">
+                            Shenzhen 120 Optimization Project • Research Hub
+                        </p>
+                        <p className="text-slate-300 text-xs mt-2">
+                            Built with React & Tailwind CSS
+                        </p>
+                    </footer>
+
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>

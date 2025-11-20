@@ -1,0 +1,693 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Robust Facility Location - Baron et al. (2011)</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    
+    <!-- Babel -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- Three.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+    <!-- KaTeX for Math -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/contrib/auto-render.min.js"></script>
+
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Lora:ital,wght@0,400;0,600;1,400&display=swap');
+        
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #FAFAFA;
+            color: #1e293b;
+        }
+        
+        h1, h2, h3, h4 {
+            font-family: 'Lora', serif;
+        }
+
+        .math-block {
+            overflow-x: auto;
+            padding: 1.5rem;
+            background: #ffffff;
+            border-radius: 0.75rem;
+            border: 1px solid #e2e8f0;
+            border-left: 4px solid #10b981;
+            margin: 1.5rem 0;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+        }
+
+        .canvas-container {
+            width: 100%;
+            height: 500px;
+            background: #0f172a;
+            border-radius: 1rem;
+            overflow: hidden;
+            position: relative;
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+        }
+
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(226, 232, 240, 0.8);
+        }
+
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #f1f1f1; 
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #cbd5e1; 
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8; 
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef, useMemo } = React;
+
+        // --- Math Component using KaTeX ---
+        const Latex = ({ children, block = false }) => {
+            const containerRef = useRef(null);
+
+            useEffect(() => {
+                if (containerRef.current) {
+                    let texString = '';
+                    if (typeof children === 'string') {
+                        texString = children;
+                    } else if (typeof children === 'number') {
+                        texString = String(children);
+                    } else if (Array.isArray(children)) {
+                        texString = children.map(c => String(c)).join('');
+                    } else {
+                        texString = String(children || '');
+                    }
+
+                    try {
+                        katex.render(texString, containerRef.current, {
+                            throwOnError: false,
+                            displayMode: block
+                        });
+                    } catch (error) {
+                        console.error("KaTeX Rendering Error:", error);
+                        containerRef.current.innerText = texString;
+                    }
+                }
+            }, [children, block]);
+
+            return <span ref={containerRef} className={block ? "block my-2" : "inline"} />;
+        };
+
+        // --- 3D Visualizer: Box vs Ellipsoid Uncertainty ---
+        const UncertaintyVisualizer = () => {
+            const mountRef = useRef(null);
+            const [mode, setMode] = useState('box'); // 'box' or 'ellipsoid'
+
+            useEffect(() => {
+                // Scene Setup
+                const scene = new THREE.Scene();
+                scene.background = new THREE.Color(0x0f172a);
+                scene.fog = new THREE.FogExp2(0x0f172a, 0.02);
+
+                const camera = new THREE.PerspectiveCamera(50, mountRef.current.clientWidth / mountRef.current.clientHeight, 0.1, 1000);
+                camera.position.set(4, 3, 5);
+                camera.lookAt(0, 0, 0);
+
+                const renderer = new THREE.WebGLRenderer({ antialias: true });
+                renderer.setSize(mountRef.current.clientWidth, mountRef.current.clientHeight);
+                renderer.shadowMap.enabled = true;
+                mountRef.current.appendChild(renderer.domElement);
+
+                // Lighting
+                const ambientLight = new THREE.AmbientLight(0x404040, 2);
+                scene.add(ambientLight);
+                const dirLight = new THREE.DirectionalLight(0xffffff, 1.5);
+                dirLight.position.set(5, 5, 5);
+                dirLight.castShadow = true;
+                scene.add(dirLight);
+                const pointLight = new THREE.PointLight(0x10b981, 1, 10);
+                pointLight.position.set(-2, 2, -2);
+                scene.add(pointLight);
+
+                // Grid
+                const gridHelper = new THREE.GridHelper(10, 20, 0x334155, 0x1e293b);
+                scene.add(gridHelper);
+
+                // Axes
+                const axesHelper = new THREE.AxesHelper(2);
+                scene.add(axesHelper);
+
+                // Shapes
+                let mainMesh;
+
+                if (mode === 'box') {
+                    // Box Uncertainty Set
+                    const geometry = new THREE.BoxGeometry(2, 2, 2);
+                    const material = new THREE.MeshStandardMaterial({ 
+                        color: 0x3b82f6, 
+                        transparent: true, 
+                        opacity: 0.6,
+                        roughness: 0.2,
+                        metalness: 0.5
+                    });
+                    mainMesh = new THREE.Mesh(geometry, material);
+                    
+                    // Edges
+                    const edges = new THREE.EdgesGeometry(geometry);
+                    const line = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: 0x93c5fd }));
+                    mainMesh.add(line);
+                } else {
+                    // Ellipsoid Uncertainty Set (Inscribed)
+                    const geometry = new THREE.SphereGeometry(1, 32, 32);
+                    const material = new THREE.MeshStandardMaterial({ 
+                        color: 0x10b981, 
+                        transparent: true, 
+                        opacity: 0.6,
+                        roughness: 0.2,
+                        metalness: 0.5
+                    });
+                    mainMesh = new THREE.Mesh(geometry, material);
+                    
+                    // Wireframe
+                    const wiregeo = new THREE.WireframeGeometry(geometry);
+                    const wire = new THREE.LineSegments(wiregeo, new THREE.LineBasicMaterial({ color: 0x6ee7b7, transparent: true, opacity: 0.3 }));
+                    mainMesh.add(wire);
+                }
+
+                scene.add(mainMesh);
+
+                // "Scenario" Particles
+                const particleCount = 100;
+                const particlesGeo = new THREE.BufferGeometry();
+                const particlesPos = [];
+                
+                for(let i=0; i<particleCount; i++) {
+                    // Random points in box [-1, 1]
+                    const x = (Math.random() - 0.5) * 2;
+                    const y = (Math.random() - 0.5) * 2;
+                    const z = (Math.random() - 0.5) * 2;
+                    
+                    // If mode is ellipsoid, only keep points inside sphere
+                    if (mode === 'ellipsoid') {
+                        if (x*x + y*y + z*z > 1) continue;
+                    }
+                    
+                    particlesPos.push(x, y, z);
+                }
+                particlesGeo.setAttribute('position', new THREE.Float32BufferAttribute(particlesPos, 3));
+                const particlesMat = new THREE.PointsMaterial({ color: 0xffffff, size: 0.05 });
+                const particleSystem = new THREE.Points(particlesGeo, particlesMat);
+                scene.add(particleSystem);
+
+                // Animation
+                let frameId;
+                const animate = () => {
+                    mainMesh.rotation.y += 0.005;
+                    particleSystem.rotation.y += 0.005;
+                    renderer.render(scene, camera);
+                    frameId = requestAnimationFrame(animate);
+                };
+                animate();
+
+                // Resize
+                const handleResize = () => {
+                    if(mountRef.current) {
+                        const w = mountRef.current.clientWidth;
+                        const h = mountRef.current.clientHeight;
+                        renderer.setSize(w, h);
+                        camera.aspect = w / h;
+                        camera.updateProjectionMatrix();
+                    }
+                };
+                window.addEventListener('resize', handleResize);
+
+                return () => {
+                    cancelAnimationFrame(frameId);
+                    window.removeEventListener('resize', handleResize);
+                    if(mountRef.current && renderer.domElement) {
+                        mountRef.current.removeChild(renderer.domElement);
+                    }
+                };
+            }, [mode]);
+
+            return (
+                <div className="relative mb-8">
+                    <div ref={mountRef} className="canvas-container" />
+                    <div className="absolute top-4 right-4 flex flex-col gap-2">
+                        <button 
+                            onClick={() => setMode('box')}
+                            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${mode === 'box' ? 'bg-blue-600 text-white shadow-lg' : 'bg-white/80 text-slate-600 hover:bg-white'}`}
+                        >
+                            Box Uncertainty
+                        </button>
+                        <button 
+                            onClick={() => setMode('ellipsoid')}
+                            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${mode === 'ellipsoid' ? 'bg-emerald-600 text-white shadow-lg' : 'bg-white/80 text-slate-600 hover:bg-white'}`}
+                        >
+                            Ellipsoidal Uncertainty
+                        </button>
+                    </div>
+                    <div className="absolute bottom-4 left-4 right-4 glass-panel p-4 rounded-lg">
+                        <h4 className="text-sm font-bold text-slate-900 mb-1">
+                            {mode === 'box' ? 'Box Uncertainty Set (The Conservative Cube)' : 'Ellipsoidal Uncertainty Set (The Risk-Pooling Sphere)'}
+                        </h4>
+                        <p className="text-xs text-slate-600">
+                            {mode === 'box' 
+                                ? "Assumes every parameter can hit its worst-case value simultaneously. The corners represent extreme scenarios (e.g., high demand everywhere)." 
+                                : "Removes the 'corners'. Assumes it's unlikely for ALL parameters to deviate to extremes at once. This 'Risk Pooling' effect leads to less conservative, more efficient solutions."}
+                        </p>
+                    </div>
+                </div>
+            );
+        };
+
+        // --- Main App Component ---
+        const App = () => {
+            useEffect(() => {
+                lucide.createIcons();
+            }, []);
+
+            return (
+                <div className="max-w-4xl mx-auto px-4 py-12">
+                    
+                    {/* Header Section */}
+                    <header className="mb-12 border-b border-slate-200 pb-8">
+                        <div className="flex items-center gap-2 text-emerald-600 font-bold tracking-wider text-xs uppercase mb-3">
+                            <i data-lucide="file-text" className="w-4 h-4"></i>
+                            <span>Paper Deep Dive</span>
+                        </div>
+                        <h1 className="text-4xl md:text-5xl font-bold text-slate-900 mb-4 leading-tight font-serif">
+                            Facility Location:<br/>A Robust Optimization Approach
+                        </h1>
+                        <div className="flex flex-wrap gap-6 text-slate-500 text-sm font-medium">
+                            <div className="flex items-center gap-2">
+                                <i data-lucide="users" className="w-4 h-4"></i>
+                                <span>Baron, Milner, Naseraldin</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <i data-lucide="book-open" className="w-4 h-4"></i>
+                                <span>Production and Operations Management (2011)</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <i data-lucide="link" className="w-4 h-4"></i>
+                                <span className="hover:text-emerald-600 cursor-pointer">DOI: 10.3401/poms.1080.01194</span>
+                            </div>
+                        </div>
+                    </header>
+
+                    {/* Quick Summary Card */}
+                    <section className="mb-12">
+                        <div className="bg-emerald-50 border border-emerald-100 rounded-xl p-6 md:p-8 flex gap-4">
+                            <div className="shrink-0 bg-emerald-600 text-white rounded-full w-10 h-10 flex items-center justify-center mt-1 shadow-lg shadow-emerald-600/20">
+                                <i data-lucide="lightbulb" className="w-5 h-5"></i>
+                            </div>
+                            <div>
+                                <h3 className="text-emerald-900 font-bold text-lg mb-2">One-Sentence Summary</h3>
+                                <p className="text-emerald-800/80 leading-relaxed">
+                                    This paper applies Robust Optimization (RO) to a multi-period facility location problem, demonstrating that modeling uncertainty as an <strong>Ellipsoid</strong> rather than a <strong>Box</strong> leads to more flexible, distributed, and profitable network designs.
+                                </p>
+                            </div>
+                        </div>
+                    </section>
+
+                    {/* Background & Core Idea */}
+                    <section className="mb-16">
+                        <h2 className="text-3xl font-bold text-slate-900 mb-6 flex items-center gap-2">
+                            <i data-lucide="compass" className="w-6 h-6 text-emerald-600"></i>
+                            Core Idea & Background
+                        </h2>
+                        <div className="prose prose-lg text-slate-600 max-w-none">
+                            <p>
+                                Facility location decisions are strategic (expensive, long-term), while demand is operational (uncertain, fluctuating). Traditional <strong>Stochastic Programming</strong> often assumes known probability distributions, which can be hard to estimate and computationally heavy.
+                            </p>
+                            <p>
+                                <strong>Robust Optimization (RO)</strong> offers an alternative: assume uncertain parameters lie within a bounded set <Latex>U</Latex>, and find a solution feasible for <em>any</em> realization in <Latex>U</Latex>.
+                            </p>
+                            <div className="grid md:grid-cols-2 gap-6 my-8">
+                                <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+                                    <div className="font-bold text-blue-600 mb-2 flex items-center gap-2">
+                                        <i data-lucide="box" className="w-4 h-4"></i> Box Uncertainty
+                                    </div>
+                                    <p className="text-sm">
+                                        Assumes each parameter (e.g., demand at each node) can independently deviate to its worst case.
+                                        <br/><span className="font-bold text-xs uppercase tracking-wide text-slate-400 mt-2 block">Consequence</span>
+                                        Extremely conservative solutions. "Fewer, Larger Facilities."
+                                    </p>
+                                </div>
+                                <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+                                    <div className="font-bold text-emerald-600 mb-2 flex items-center gap-2">
+                                        <i data-lucide="circle" className="w-4 h-4"></i> Ellipsoidal Uncertainty
+                                    </div>
+                                    <p className="text-sm">
+                                        Assumes it is unlikely for all parameters to hit worst-case simultaneously (Risk Pooling).
+                                        <br/><span className="font-bold text-xs uppercase tracking-wide text-slate-400 mt-2 block">Consequence</span>
+                                        Balanced solutions. "More, Smaller, Flexible Facilities."
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+
+                    {/* 3D Visualization */}
+                    <UncertaintyVisualizer />
+
+                    {/* Detailed Content Grid */}
+                    <div className="grid md:grid-cols-[1fr_320px] gap-12 mt-12">
+                        
+                        {/* Left Column: Detailed Analysis */}
+                        <main>
+                            
+                            {/* The Problem Setup */}
+                            <section className="mb-16">
+                                <h2 className="text-2xl font-bold text-slate-900 mb-6 flex items-center gap-2">
+                                    <i data-lucide="target" className="w-5 h-5 text-emerald-600"></i>
+                                    Model Setup (Nominal)
+                                </h2>
+                                <p className="text-slate-600 mb-4">
+                                    The base problem is a <strong>Capacitated Multi-Period Fixed-Charge Location Problem</strong>. The firm must decide location and capacity <em>before</em> knowing future demand.
+                                </p>
+                                
+                                <div className="math-block">
+                                    <h4 className="text-xs font-bold text-slate-400 uppercase mb-4">The Nominal Model (P')</h4>
+                                    
+                                    {/* Objective Function */}
+                                    <div className="mb-4">
+                                        <p className="text-sm font-semibold text-slate-700 mb-2">Objective: Maximize Total Profit <Latex>\tau</Latex></p>
+                                        <Latex block={true}>
+                                            {`\\text{Max } \\tau \\quad \\text{s.t.} \\quad \\sum_{i=1}^{N}\\sum_{j=1}^{N}\\sum_{t=1}^{T} (\\eta - d_{ij}) D_{jt} X_{ijt} - \\sum_{i=1}^{N}\\sum_{t=1}^{T} c_{it} Z_{it} - \\sum_{i=1}^{N} (C_{i0} Z_{i0} + K_i I_i) \\ge \\tau`}
+                                        </Latex>
+                                        <p className="text-xs text-slate-500 mt-1">
+                                            (Revenue - Transport) - Production Cost - (Capacity + Fixed Costs) ≥ Profit
+                                        </p>
+                                    </div>
+
+                                    {/* Constraints */}
+                                    <div className="space-y-3">
+                                        <div>
+                                            <p className="text-sm font-semibold text-slate-700 mb-1">Demand Satisfaction Constraint:</p>
+                                            <Latex block={true}>
+                                                {`\\sum_{j=1}^{N} D_{jt} X_{ijt} \\le Z_{it} \\quad \\forall i, t`}
+                                            </Latex>
+                                            <p className="text-xs text-slate-500">
+                                                Total demand served by facility <Latex>i</Latex> must not exceed its production <Latex>{`Z_{it}`}</Latex>.
+                                            </p>
+                                        </div>
+                                        
+                                        <div>
+                                            <p className="text-sm font-semibold text-slate-700 mb-1">Capacity Constraint:</p>
+                                            <Latex block={true}>
+                                                {`Z_{it} \\le Z_{i0} \\quad \\forall i, t`}
+                                            </Latex>
+                                            <p className="text-xs text-slate-500">
+                                                Production in any period cannot exceed the initially established capacity <Latex>{`Z_{i0}`}</Latex>.
+                                            </p>
+                                        </div>
+
+                                        <div>
+                                            <p className="text-sm font-semibold text-slate-700 mb-1">Facility Existence Constraint:</p>
+                                            <Latex block={true}>
+                                                {`Z_{i0} \\le M I_i \\quad \\forall i`}
+                                            </Latex>
+                                            <p className="text-xs text-slate-500">
+                                                You can only have capacity if you opened the facility (<Latex>{`I_i=1`}</Latex>).
+                                            </p>
+                                        </div>
+                                    </div>
+                                    
+                                    <div className="mt-6 space-y-2 text-sm text-slate-700 border-t border-slate-100 pt-4">
+                                        <p><strong>Sets & Indices:</strong></p>
+                                        <ul className="list-disc list-inside pl-2 space-y-1 text-xs">
+                                            <li><Latex>{`N`}</Latex>: Set of nodes (potential facility locations & demand points).</li>
+                                            <li><Latex>{`T`}</Latex>: Time horizon.</li>
+                                            <li><Latex>{`i, j`}</Latex>: Indices for facility and demand nodes.</li>
+                                            <li><Latex>{`t`}</Latex>: Index for time periods.</li>
+                                        </ul>
+                                    </div>
+                                </div>
+                            </section>
+
+                            {/* Robust Formulations */}
+                            <section className="mb-16">
+                                <h2 className="text-2xl font-bold text-slate-900 mb-6 flex items-center gap-2">
+                                    <i data-lucide="shield" className="w-5 h-5 text-emerald-600"></i>
+                                    Robust Counterparts
+                                </h2>
+                                <p className="text-slate-600 mb-6">
+                                    When demand <Latex>{`D_{jt}`}</Latex> becomes uncertain (<Latex>{`\\tilde{D}_{jt}`}</Latex>), the constraints must hold for <strong>all</strong> realizations within the uncertainty set <Latex>U</Latex>. This transforms the linear constraints into "Robust Counterparts".
+                                </p>
+
+                                <div className="space-y-12">
+                                    
+                                    {/* Box Model */}
+                                    <div>
+                                        <div className="flex items-center gap-2 mb-3">
+                                            <span className="bg-blue-100 text-blue-700 text-xs font-bold px-2 py-1 rounded uppercase">Case 1</span>
+                                            <h3 className="text-lg font-bold text-slate-900">Box Uncertainty (Intervals)</h3>
+                                        </div>
+                                        
+                                        <div className="bg-slate-50 p-5 rounded-lg border border-slate-200 mb-4">
+                                            <p className="text-sm text-slate-700 mb-2"><strong>Uncertainty Set:</strong></p>
+                                            <Latex block={true}>
+                                                {`U^B = \\{ \\tilde{D} \\mid |\\tilde{D}_{jt} - \\bar{D}_{jt}| \\le \\epsilon_t \\bar{D}_{jt} \\}`}
+                                            </Latex>
+                                            <p className="text-xs text-slate-500 mt-2">
+                                                Demand lies in the interval <Latex>{`[\\bar{D}_{jt}(1-\\epsilon_t), \\bar{D}_{jt}(1+\\epsilon_t)]`}</Latex>.
+                                            </p>
+                                        </div>
+
+                                        <div className="space-y-4">
+                                            <div className="math-block border-l-blue-500">
+                                                <p className="text-sm font-bold text-blue-700 mb-2">Robust Capacity Constraint:</p>
+                                                <Latex block={true}>
+                                                    {`\\sum_{j=1}^{N} \\bar{D}_{jt} (1 + \\epsilon_t) X_{ijt} \\le Z_{it}`}
+                                                </Latex>
+                                                <p className="text-xs text-slate-500 mt-2">
+                                                    <strong>Logic:</strong> To be safe against the worst case in a box, you must assume <strong>every</strong> demand point hits its upper bound <Latex>{`\\bar{D}_{jt}(1+\\epsilon_t)`}</Latex> simultaneously. This forces <Latex>{`Z_{it}`}</Latex> (capacity) to be very large.
+                                                </p>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {/* Ellipsoid Model */}
+                                    <div>
+                                        <div className="flex items-center gap-2 mb-3">
+                                            <span className="bg-emerald-100 text-emerald-700 text-xs font-bold px-2 py-1 rounded uppercase">Case 2</span>
+                                            <h3 className="text-lg font-bold text-slate-900">Ellipsoidal Uncertainty (Conic)</h3>
+                                        </div>
+
+                                        <div className="bg-slate-50 p-5 rounded-lg border border-slate-200 mb-4">
+                                            <p className="text-sm text-slate-700 mb-2"><strong>Uncertainty Set:</strong></p>
+                                            <Latex block={true}>
+                                                {`U^E = \\{ \\tilde{D} \\mid \\sum_{j,t} \\left( \\frac{\\tilde{D}_{jt} - \\bar{D}_{jt}}{\\sigma_{jt}} \\right)^2 \\le \\Omega^2 \\}`}
+                                            </Latex>
+                                            <p className="text-xs text-slate-500 mt-2">
+                                                Based on the <Latex>L_2</Latex> norm of deviations. <Latex>\Omega</Latex> is the safety parameter (budget of uncertainty).
+                                            </p>
+                                        </div>
+
+                                        <div className="space-y-4">
+                                            <div className="math-block border-l-emerald-500">
+                                                <p className="text-sm font-bold text-emerald-700 mb-2">Robust Capacity Constraint (Theorem):</p>
+                                                <p className="text-xs text-slate-600 mb-2">
+                                                    Using the duality of conic programming, the robust counterpart is derived as:
+                                                </p>
+                                                <Latex block={true}>
+                                                    {`\\sum_{j=1}^{N} \\bar{D}_{jt} X_{ijt} + \\Omega_{2t} \\sqrt{\\sum_{j=1}^{N} \\sigma_{jt}^2 X_{ijt}^2} \\le Z_{it}`}
+                                                </Latex>
+                                                <p className="text-xs text-slate-500 mt-3">
+                                                    <strong>Key Insight:</strong> The capacity <Latex>{`Z_{it}`}</Latex> only needs to cover the <strong>mean demand</strong> plus a safety margin based on the <strong>Euclidean norm</strong> of standard deviations. 
+                                                    <br/><br/>
+                                                    Since <Latex>{`\\sqrt{\\sum \\sigma^2} < \\sum \\sigma`}</Latex>, this "Risk Pooling" term is much smaller than the Box model's term. This mathematically proves why Ellipsoidal uncertainty leads to less conservative (cheaper) solutions.
+                                                </p>
+                                            </div>
+
+                                            <div className="bg-amber-50 p-4 rounded border border-amber-100 text-sm text-amber-900">
+                                                <strong>Tractability:</strong> While the Box model remains a linear program (MILP), the Ellipsoidal model becomes a <strong>Second-Order Cone Program (SOCP)</strong>. Modern solvers like MOSEK or Gurobi can handle this efficiently.
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                </div>
+                            </section>
+
+                            {/* New Discoveries */}
+                            <section className="mb-16">
+                                <h2 className="text-2xl font-bold text-slate-900 mb-6 flex items-center gap-2">
+                                    <i data-lucide="microscope" className="w-5 h-5 text-emerald-600"></i>
+                                    Key Discoveries
+                                </h2>
+                                <ul className="space-y-4 text-slate-700">
+                                    <li className="flex gap-3">
+                                        <div className="shrink-0 w-6 h-6 rounded bg-blue-100 text-blue-600 flex items-center justify-center font-bold text-xs">1</div>
+                                        <p><strong>Topology Difference:</strong> Box models produce centralized networks (few, large facilities) to be safe against everything. Ellipsoidal models produce decentralized networks (many, smaller facilities) to leverage flexibility.</p>
+                                    </li>
+                                    <li className="flex gap-3">
+                                        <div className="shrink-0 w-6 h-6 rounded bg-emerald-100 text-emerald-600 flex items-center justify-center font-bold text-xs">2</div>
+                                        <p><strong>Profitability:</strong> The Ellipsoidal model consistently outperforms the Box model in simulated profit, capturing ~80% of the theoretical upper bound benefit.</p>
+                                    </li>
+                                </ul>
+                            </section>
+
+                            {/* Project Implications (UPDATED) */}
+                            <section>
+                                <h2 className="text-2xl font-bold text-slate-900 mb-6 flex items-center gap-2">
+                                    <i data-lucide="zap" className="w-5 h-5 text-amber-500"></i>
+                                    Implications for Shenzhen 120
+                                </h2>
+                                <div className="space-y-4">
+                                    
+                                    {/* 5.1 Risk Type */}
+                                    <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+                                        <h3 className="text-lg font-bold text-slate-900 mb-3 flex items-center gap-2">
+                                            <span className="bg-amber-100 text-amber-800 text-xs px-2 py-1 rounded">5.1</span>
+                                            Determine the "Risk Type"
+                                        </h3>
+                                        <div className="space-y-4">
+                                            <div className="flex gap-3">
+                                                <div className="shrink-0 w-1 h-full bg-blue-500 rounded"></div>
+                                                <div>
+                                                    <p className="font-bold text-slate-800 text-sm">Extreme Disaster Mode (Box Approach)</p>
+                                                    <p className="text-slate-600 text-xs mt-1">
+                                                        If your goal is to handle city-wide super typhoons or pandemics (demand surges everywhere), use <strong>Box Uncertainty</strong>. This implies establishing a few core, large-scale emergency centers with massive reserves.
+                                                    </p>
+                                                </div>
+                                            </div>
+                                            <div className="flex gap-3">
+                                                <div className="shrink-0 w-1 h-full bg-emerald-500 rounded"></div>
+                                                <div>
+                                                    <p className="font-bold text-slate-800 text-sm">Daily Fluctuation Mode (Ellipsoid Approach)</p>
+                                                    <p className="text-slate-600 text-xs mt-1">
+                                                        For optimizing daily operations (e.g., morning peaks in District A, evening in District B), use <strong>Ellipsoidal Uncertainty</strong>. Deploy many small-scale standby points and leverage mobility for cross-support.
+                                                    </p>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {/* 5.2 Model Extension */}
+                                    <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+                                        <h3 className="text-lg font-bold text-slate-900 mb-3 flex items-center gap-2">
+                                            <span className="bg-amber-100 text-amber-800 text-xs px-2 py-1 rounded">5.2</span>
+                                            Model Extension Suggestions
+                                        </h3>
+                                        <p className="text-slate-600 text-sm mb-4">
+                                            <span className="text-red-500 font-bold">Stop</span> using only historical averages (Nominal Problem) as it underestimates required capacity.
+                                        </p>
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                            <div className="bg-slate-50 p-3 rounded border border-slate-100">
+                                                <p className="font-bold text-slate-700 text-sm mb-1">Step 1: Box Model</p>
+                                                <p className="text-xs text-slate-500">Start here. It's a Mixed Integer Linear Program (MILP), easier to solve with Gurobi/Cplex.</p>
+                                            </div>
+                                            <div className="bg-slate-50 p-3 rounded border border-slate-100">
+                                                <p className="font-bold text-slate-700 text-sm mb-1">Step 2: Ellipsoid Model</p>
+                                                <p className="text-xs text-slate-500">Advance to this. It's a Second-Order Cone Program (SOCP), harder to solve but yields better, less conservative results.</p>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {/* 5.3 Capacity Planning */}
+                                    <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+                                        <h3 className="text-lg font-bold text-slate-900 mb-3 flex items-center gap-2">
+                                            <span className="bg-amber-100 text-amber-800 text-xs px-2 py-1 rounded">5.3</span>
+                                            Strategic Capacity Planning
+                                        </h3>
+                                        <p className="text-slate-600 text-sm mb-3">
+                                            The maximum capacity <Latex>{`Z_{i0}`}</Latex> (ambulances/parking spots) is a strategic decision that must be fixed <em>before</em> uncertainty is revealed.
+                                        </p>
+                                        <div className="bg-amber-50 p-4 rounded border border-amber-100">
+                                            <p className="text-xs text-amber-900 font-medium mb-1">The Robust Formula for Safety Buffer:</p>
+                                            <Latex block={true}>
+                                                {`\\text{Capacity} = \\text{Mean Demand} + \\Omega \\times \\text{Std. Dev}`}
+                                            </Latex>
+                                            <p className="text-xs text-amber-800 mt-2">
+                                                Use Formulas (12) & (14) to calculate exactly how much "extra" space you need to guarantee service levels under uncertainty.
+                                            </p>
+                                        </div>
+                                    </div>
+
+                                </div>
+                            </section>
+
+                        </main>
+
+                        {/* Right Column: Sidebar Info */}
+                        <aside className="space-y-8 h-fit sticky top-8">
+                            
+                            {/* Metadata Card */}
+                            <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+                                <h3 className="font-bold text-xs uppercase text-slate-400 mb-4 tracking-wider">Paper Metadata</h3>
+                                <ul className="space-y-4 text-sm">
+                                    <li className="flex flex-col">
+                                        <span className="text-slate-500 text-xs">Keywords</span>
+                                        <span className="font-medium text-slate-800">Facility Location, Robust Optimization, Conic Programming</span>
+                                    </li>
+                                    <li className="flex flex-col">
+                                        <span className="text-slate-500 text-xs">Problem Class</span>
+                                        <span className="font-medium text-slate-800">Multi-period, Capacitated, Fixed-Charge</span>
+                                    </li>
+                                    <li className="flex flex-col">
+                                        <span className="text-slate-500 text-xs">Technique</span>
+                                        <span className="font-medium text-slate-800">Mixed Integer Conic Quadratic Programming (MICQP)</span>
+                                    </li>
+                                </ul>
+                            </div>
+
+                            {/* Key Takeaways */}
+                            <div className="bg-slate-900 text-white p-6 rounded-xl shadow-lg">
+                                <h3 className="font-bold text-lg mb-4 border-b border-slate-700 pb-2">Core Discoveries</h3>
+                                <ul className="space-y-4 text-sm text-slate-300">
+                                    <li className="flex gap-3">
+                                        <i data-lucide="check-circle" className="w-4 h-4 shrink-0 text-emerald-400 mt-0.5"></i>
+                                        <span>Box uncertainty leads to conservative, expensive solutions.</span>
+                                    </li>
+                                    <li className="flex gap-3">
+                                        <i data-lucide="check-circle" className="w-4 h-4 shrink-0 text-emerald-400 mt-0.5"></i>
+                                        <span>Ellipsoidal sets allow "Risk Pooling," reducing total capacity needed.</span>
+                                    </li>
+                                    <li className="flex gap-3">
+                                        <i data-lucide="check-circle" className="w-4 h-4 shrink-0 text-emerald-400 mt-0.5"></i>
+                                        <span>Robust models perform significantly better than Nominal models when demand fluctuates.</span>
+                                    </li>
+                                </ul>
+                            </div>
+
+                        </aside>
+                    </div>
+
+                    {/* Footer */}
+                    <footer className="mt-20 border-t border-slate-200 pt-8 text-center text-slate-400 text-sm">
+                        <p>Generated for the Shenzhen Ambulance Optimization Project</p>
+                        <p className="mt-2">Based on Baron, O., Milner, J., & Naseraldin, H. (2011)</p>
+                    </footer>
+
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
